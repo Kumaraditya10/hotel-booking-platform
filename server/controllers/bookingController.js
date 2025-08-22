@@ -1,6 +1,7 @@
 import Booking from "../models/Booking.js";
 import Room from "../models/Room.js";
 import Hotel from "../models/Hotel.js"; // Added missing import
+import transporter from "../configs/nodemailer.js";
 
 // Function to check Availability of Room
 const checkAvailability = async ({ checkInDate, checkOutDate, room }) => {
@@ -73,6 +74,28 @@ export const createBooking = async (req, res) => {
       totalPrice,
     });
 
+    const mailOptions = {
+      from: process.env.SENDER_EMAIL,
+      to: req.user.emial,
+      subject: 'Hotel Booking Deatails',
+      html:`
+      <h2>Your Booking Details</h2>
+      <p>Dear ${req.user.username},</p>
+      <p>Thank you for booking! Here are your details:</p>
+      <ul>
+        <li>Booking ID:</strong> ${Booking._id}</li>
+        <li>Hotel Name:</strong> ${roomData.hotel.name}</li>
+        <li>Location:</strong> ${roomData.hotel.address}</li>
+        <li>Date:</strong> ${Booking.checkInDate.toDateString()}</li>
+        <li>Booking Amount:</strong> ${process.env.CURRENCY || '$'} ${Booking.totalPrice} /night</li>
+      </ul>
+      <p>We look forward to welcoming you!</p>
+      <p>If you need to make any changes, feel free to connect us.</p>
+      `
+    }
+
+    await transporter.sendMail(mailOptions)
+
     res.json({ success: true, message: "Booking created successfully" });
   } catch (error) {
     res.json({ success: false, message: "Failed to create booking" });
@@ -123,3 +146,44 @@ export const getHotelBookings = async (req, res) => {
     res.json({ success: false, message: "Failed to fetch bookings" });
   }
 };
+
+
+export const stripePayment = async (req, res) =>{
+  try {
+    const {bookingId} = req.body;
+
+    const booking = await Booking.findById(bookingId);
+    const roomData = await Room.findById(booking.room).populate('hotel');
+    const totalPrice = booking.totalPrice;
+    const {origin} = req.headers;
+
+    const stripePayment = new stripe(process.env.STRIPE_SECRET_KEY);
+
+    const line_items = [
+      {
+        price_data:{
+          currency: "usd",
+          product_data:{
+            name: roomData.hotel.name,
+          },
+          unit_amount: totalPrice * 100
+        },
+        quantity: 1,
+      }
+    ]
+
+    //Create Checkout Session
+    const Session = await stripeInstance.checkout.sessions.create({
+      line_items,
+      mode: "payment",
+      success_url: `${origin}/loader/my-bookings`,
+      cancle_url: `${origin}/my-bookings`,
+      metadata: {
+        bookingId,
+      }
+    })
+    res.json({success: true, url: sessionStorage.url})
+  } catch (error) {
+    res.json({success: false, message: "Payment Failed"})
+  }
+}
